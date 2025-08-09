@@ -34,7 +34,7 @@
     "structured-output"
   ],
   "author": "Twoje Imię",
-  "license": "MIT",
+  "license": "FreeBSD-2-Clause",
   "engines": {
     "node": ">=16"
   },
