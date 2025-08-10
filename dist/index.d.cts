@@ -4,6 +4,8 @@
 declare function flexEnum(values: string[], description?: string): any;
 declare function flexEnum(enumDef: any, description?: string): any;
 declare function flexEnum(schema: any, dataJson: unknown): any;
+declare function flexEnum(zodInstance: any, values: string[], description?: string): any;
+declare function flexEnum(zodInstance: any, enumDef: any, description?: string): any;
 /**
  * Extends a ZodEnum with new values.
  */

@@ -2,13 +2,63 @@
 import * as z3 from "zod/v3";
 import * as z4 from "zod/v4";
 
-let z: any;
-let zodVersion: 'v3' | 'v4';
+// We'll detect the version dynamically based on the schemas passed to us
+let z: any = z3.z; // Default to v3
+let zodVersion: 'v3' | 'v4' = 'v3';
 
-// Detect version by checking structure
-const testSchema = z4.z.string();
-zodVersion = (testSchema as any)._zod ? 'v4' : 'v3';
-z = zodVersion === 'v4' ? z4.z : z3.z;
+// Try to detect global Zod instance
+function detectGlobalZod(): any {
+  // Try to find Zod in the global scope (for browser) or require cache (for Node)
+  if (typeof window !== 'undefined' && (window as any).z) {
+    return (window as any).z;
+  }
+  
+  // In Node.js, default to v3 for better compatibility
+  // Most existing projects use v3, and v4 is newer
+  try {
+    return z3.z;
+  } catch {
+    return z4.z;
+  }
+}
+
+// Initialize with best guess
+z = detectGlobalZod();
+zodVersion = (z.string()._zod) ? 'v4' : 'v3';
+
+// Dynamic version detection based on schema objects
+function detectZodVersion(schema: any): 'v3' | 'v4' {
+  if (schema && (schema as any)._zod) {
+    return 'v4';
+  }
+  return 'v3';
+}
+
+// Get the Zod instance from a schema's constructor
+function getZodInstanceFromSchema(schema: any): any {
+  if (schema && schema.constructor) {
+    // Try to get the global z from the same context as the schema
+    const ctor = schema.constructor;
+    
+    // Check if it's v4 by looking for _zod property
+    if ((schema as any)._zod) {
+      return z4.z;
+    } else {
+      return z3.z;
+    }
+  }
+  
+  // Fallback to our default
+  return z;
+}
+
+// Update the z instance based on detected version
+function updateZodInstance(version: 'v3' | 'v4') {
+  if (zodVersion !== version) {
+    zodVersion = version;
+    z = zodVersion === 'v4' ? z4.z : z3.z;
+  }
+}
 
 // --- Type definitions ---
 
@@ -17,22 +67,18 @@ type ZodEnumValues = [string, ...string[]];
 // --- Compatibility helpers ---
 
 function getDef(schema: any): any {
-  if (zodVersion === 'v4') {
-    return schema._zod?.def || schema.def;
-  } else {
-    return schema._def;
-  }
+  // Try both v4 and v3 structures
+  return schema._zod?.def || schema._def || schema.def;
 }
 
 function setMetadata(schema: any, metadata: any): void {
-  if (zodVersion === 'v4') {
-    if (schema._zod?.def) {
-      schema._zod.def.metadata = metadata;
-    } else if (schema.def) {
-      schema.def.metadata = metadata;
-    }
-  } else if (zodVersion === 'v3' && schema._def) {
+  // Try v4 first, then v3
+  if (schema._zod?.def) {
+    schema._zod.def.metadata = metadata;
+  } else if (schema._def) {
     schema._def.metadata = metadata;
+  } else if (schema.def) {
+    schema.def.metadata = metadata;
   }
 }
 
@@ -77,48 +123,51 @@ function extendSchema(schema: any, fields: any): any {
 // --- Type Guards ---
 
 function isZodObject(x: unknown): boolean {
-  if (zodVersion === 'v4') {
-    return (x as any)?._zod?.traits?.has('ZodObject') || (x as any)?._zod?.traits?.has('$ZodObject');
-  } else {
-    const def = getDef(x);
-    return def?.typeName === 'ZodObject';
-  }
+  // Try both v3 and v4 detection
+  const def = (x as any)?._def || (x as any)?._zod?.def;
+  return def?.typeName === 'ZodObject' || 
+         (x as any)?._zod?.traits?.has('ZodObject') || 
+         (x as any)?._zod?.traits?.has('$ZodObject');
 }
 
 function isZodEnum(x: unknown): boolean {
-  if (zodVersion === 'v4') {
-    return (x as any)?._zod?.traits?.has('ZodEnum') || (x as any)?._zod?.traits?.has('$ZodEnum');
-  } else {
-    const def = getDef(x);
-    return def?.typeName === 'ZodEnum';
-  }
+  // Try both v3 and v4 detection
+  const def = (x as any)?._def || (x as any)?._zod?.def;
+  return def?.typeName === 'ZodEnum' || 
+         (x as any)?._zod?.traits?.has('ZodEnum') || 
+         (x as any)?._zod?.traits?.has('$ZodEnum');
 }
 
 function isZodUnion(x: unknown): boolean {
-  if (zodVersion === 'v4') {
-    return (x as any)?._zod?.traits?.has('ZodUnion') || (x as any)?._zod?.traits?.has('$ZodUnion');
-  } else {
-    const def = getDef(x);
-    return def?.typeName === 'ZodUnion';
-  }
+  // Try both v3 and v4 detection
+  const def = (x as any)?._def || (x as any)?._zod?.def;
+  return def?.typeName === 'ZodUnion' || 
+         (x as any)?._zod?.traits?.has('ZodUnion') || 
+         (x as any)?._zod?.traits?.has('$ZodUnion');
 }
 
 function isZodString(x: unknown): boolean {
-  if (zodVersion === 'v4') {
-    return (x as any)?._zod?.traits?.has('ZodString') || (x as any)?._zod?.traits?.has('$ZodString');
-  } else {
-    const def = getDef(x);
-    return def?.typeName === 'ZodString';
-  }
+  // Try both v3 and v4 detection
+  const def = (x as any)?._def || (x as any)?._zod?.def;
+  return def?.typeName === 'ZodString' || 
+         (x as any)?._zod?.traits?.has('ZodString') || 
+         (x as any)?._zod?.traits?.has('$ZodString');
 }
 
 function isZodOptional(x: unknown): boolean {
-  if (zodVersion === 'v4') {
-    return (x as any)?._zod?.traits?.has('ZodOptional') || (x as any)?._zod?.traits?.has('$ZodOptional');
-  } else {
-    const def = getDef(x);
-    return def?.typeName === 'ZodOptional';
-  }
+  // Try both v3 and v4 detection
+  const def = (x as any)?._def || (x as any)?._zod?.def;
+  return def?.typeName === 'ZodOptional' || 
+         (x as any)?._zod?.traits?.has('ZodOptional') || 
+         (x as any)?._zod?.traits?.has('$ZodOptional');
+}
+
+function isZodNullable(x: unknown): boolean {
+  // Try both v3 and v4 detection
+  const def = (x as any)?._def || (x as any)?._zod?.def;
+  return def?.typeName === 'ZodNullable' || 
+         (x as any)?._zod?.traits?.has('ZodNullable') || 
+         (x as any)?._zod?.traits?.has('$ZodNullable');
 }
 
 function unwrapOptional(x: any): any {
@@ -127,6 +176,40 @@ function unwrapOptional(x: any): any {
     return def?.innerType;
   }
   return x;
+}
+
+function unwrapNullable(x: any): any {
+  if (isZodNullable(x)) {
+    const def = getDef(x);
+    return def?.innerType;
+  }
+  return x;
+}
+
+function unwrapOptionalAndNullable(x: any): { schema: any; isOptional: boolean; isNullable: boolean } {
+  let schema = x;
+  let isOptional = false;
+  let isNullable = false;
+
+  // Check for optional wrapper
+  if (isZodOptional(schema)) {
+    isOptional = true;
+    schema = unwrapOptional(schema);
+  }
+
+  // Check for nullable wrapper
+  if (isZodNullable(schema)) {
+    isNullable = true;
+    schema = unwrapNullable(schema);
+  }
+
+  // Check again for optional after nullable (in case of .nullable().optional())
+  if (isZodOptional(schema)) {
+    isOptional = true;
+    schema = unwrapOptional(schema);
+  }
+
+  return { schema, isOptional, isNullable };
 }
 
 function isFlexEnum(x: unknown): boolean {
@@ -160,7 +243,17 @@ function toTuple(values: string[]): ZodEnumValues {
 
 // --- flexEnum ---
 
-const DEFAULT_DESC = "A new, previously undefined element compared to previous enum values.";
+const DEFAULT_DESC = "If none of the existing enum values match, provide a new appropriate value for this field. Don't copy this description to the new value.";
+
+/**
+ * Sanitizes a value to prevent DEFAULT_DESC from being added as an enum value
+ */
+function sanitizeEnumValue(value: string): string {
+    if (value === DEFAULT_DESC || value.includes(DEFAULT_DESC)) {
+        return "unknown";
+    }
+    return value;
+}
 
 /**
  * Creates a flexible enum that allows for dynamic extension.
@@ -168,31 +261,72 @@ const DEFAULT_DESC = "A new, previously undefined element compared to previous e
 export function flexEnum(values: string[], description?: string): any;
 export function flexEnum(enumDef: any, description?: string): any;
 export function flexEnum(schema: any, dataJson: unknown): any;
+export function flexEnum(zodInstance: any, values: string[], description?: string): any;
+export function flexEnum(zodInstance: any, enumDef: any, description?: string): any;
 
 export function flexEnum(...args: any[]): any {
-  const [firstArg, secondArg] = args;
+  const [firstArg, secondArg, thirdArg] = args;
+
+  // New overloads: (zodInstance, values | ZodEnum, description?)
+  if (args.length >= 2 && typeof firstArg === 'object' && 
+      firstArg.enum && firstArg.string && firstArg.object) {
+    // First arg looks like a Zod instance
+    const zodInstance = firstArg;
+    
+    if (Array.isArray(secondArg) || isZodEnum(secondArg)) {
+      const enumDef = Array.isArray(secondArg) ? zodInstance.enum(toTuple(secondArg)) : secondArg;
+      const description = (thirdArg as string) || DEFAULT_DESC;
+      
+      // Create a union with string to make it truly flexible
+      const stringSchema = zodInstance.string().describe(description);
+      const flexibleEnum = enumDef.or(stringSchema);
+      
+      // Store metadata on the union
+      setMetadata(flexibleEnum, { enumForge: true, description });
+      return flexibleEnum;
+    }
+  }
 
   // Overload 1 & 2: (values | ZodEnum, description?)
   if (Array.isArray(firstArg) || isZodEnum(firstArg)) {
-    const enumDef = Array.isArray(firstArg) ? z.enum(toTuple(firstArg)) : firstArg;
+    let zodInstance = z; // Default
+    
+    // If we have a ZodEnum, use the same Zod instance
+    if (!Array.isArray(firstArg)) {
+      zodInstance = getZodInstanceFromSchema(firstArg);
+      const detectedVersion = detectZodVersion(firstArg);
+      updateZodInstance(detectedVersion);
+    }
+    
+    const enumDef = Array.isArray(firstArg) ? zodInstance.enum(toTuple(firstArg)) : firstArg;
     const description = (secondArg as string) || DEFAULT_DESC;
     
-    // Store description for future use when extending
-    setMetadata(enumDef, { enumForge: true, description });
-    return enumDef;
+    // Create a union with string to make it truly flexible
+    const stringSchema = zodInstance.string().describe(description);
+    const flexibleEnum = enumDef.or(stringSchema);
+    
+    // Store metadata on the union
+    setMetadata(flexibleEnum, { enumForge: true, description });
+    return flexibleEnum;
   }
 
   // Overload 3: (schema, dataJson)
   if (isZodObject(firstArg) && secondArg) {
-    return updateSchemaFromData(firstArg, secondArg);
+    // Detect version from the schema object and update our instance
+    const zodInstance = getZodInstanceFromSchema(firstArg);
+    const detectedVersion = detectZodVersion(firstArg);
+    updateZodInstance(detectedVersion);
+    
+    return updateSchemaFromData(firstArg, secondArg, zodInstance);
   }
 
   throw new Error(
-    "Invalid flexEnum signature. Use: flexEnum(values, desc?), flexEnum(z.enum(...), desc?) or flexEnum(schema, dataJson)."
+    "Invalid flexEnum signature. Use: flexEnum(values, desc?), flexEnum(z.enum(...), desc?), flexEnum(schema, dataJson), or flexEnum(z, values, desc?)."
   );
 }
 
-function updateSchemaFromData(schema: any, data: any): any {
+function updateSchemaFromData(schema: any, data: any, zodInstance?: any): any {
+    const zod = zodInstance || z; // Use passed instance or fallback to global
     const shape = getShape(schema);
     const modifiedFields: Record<string, any> = {};
 
@@ -201,15 +335,17 @@ function updateSchemaFromData(schema: any, data: any): any {
             const field = shape[key];
             const value = data?.[key];
 
-            // Unwrap optional fields to get the underlying type
-            const unwrappedField = unwrapOptional(field);
-            const isOptional = isZodOptional(field);
+            // Unwrap optional and nullable fields to get the underlying type
+            const { schema: unwrappedField, isOptional, isNullable } = unwrapOptionalAndNullable(field);
 
             if (isZodObject(unwrappedField) && value) {
-                const newField = updateSchemaFromData(unwrappedField, value);
+                const newField = updateSchemaFromData(unwrappedField, value, zod);
                 if (newField !== unwrappedField) {
-                    // If it was optional, wrap the new field back in optional
-                    const finalField = isOptional ? newField.optional() : newField;
+                    // Wrap the new field back with nullable/optional in the same order
+                    // IMPORTANT: Use the same Zod instance that created the new field
+                    let finalField = newField;
+                    if (isNullable) finalField = finalField.nullable();
+                    if (isOptional) finalField = finalField.optional();
                     modifiedFields[key] = finalField;
                 }
             } else if (isFlexEnum(unwrappedField)) {
@@ -222,12 +358,20 @@ function updateSchemaFromData(schema: any, data: any): any {
                     const currentValues = getEnumValues(enumPart);
 
                     if (typeof value === 'string' && !currentValues.includes(value)) {
-                        const newEnumValues = [...currentValues, value];
-                        const newEnum = z.enum(toTuple(newEnumValues));
-                        const newUnion = newEnum.or(stringPart);
+                        const sanitizedValue = sanitizeEnumValue(value);
+                        const newEnumValues = [...currentValues, sanitizedValue];
+                        const newEnum = zod.enum(toTuple(newEnumValues));
+                        // Create new string part using the same Zod instance for consistency
+                        const stringDef = getDef(stringPart);
+                        const description = stringDef?.description || DEFAULT_DESC;
+                        const newStringPart = zod.string().describe(description);
+                        const newUnion = newEnum.or(newStringPart);
                         setMetadata(newUnion, { enumForge: true });
-                        // If it was optional, wrap the new union back in optional
-                        const finalField = isOptional ? newUnion.optional() : newUnion;
+                        // Wrap the new union back with nullable/optional in the same order
+                        // Use the passed Zod instance to maintain version consistency
+                        let finalField = newUnion;
+                        if (isNullable) finalField = finalField.nullable();
+                        if (isOptional) finalField = finalField.optional();
                         modifiedFields[key] = finalField;
                     }
                 } else if (isZodEnum(unwrappedField)) {
@@ -236,13 +380,16 @@ function updateSchemaFromData(schema: any, data: any): any {
                     const metadata = def.metadata;
                     
                     if (typeof value === 'string' && !currentValues.includes(value)) {
-                        const newEnumValues = [...currentValues, value];
-                        const newEnum = z.enum(toTuple(newEnumValues));
+                        const sanitizedValue = sanitizeEnumValue(value);
+                        const newEnumValues = [...currentValues, sanitizedValue];
+                        const newEnum = zod.enum(toTuple(newEnumValues));
                         const description = metadata?.description || DEFAULT_DESC;
-                        const newUnion = newEnum.or(z.string().describe(description));
+                        const newUnion = newEnum.or(zod.string().describe(description));
                         setMetadata(newUnion, { enumForge: true });
-                        // If it was optional, wrap the new union back in optional
-                        const finalField = isOptional ? newUnion.optional() : newUnion;
+                        // Wrap the new union back with nullable/optional in the same order
+                        let finalField = newUnion;
+                        if (isNullable) finalField = finalField.nullable();
+                        if (isOptional) finalField = finalField.optional();
                         modifiedFields[key] = finalField;
                     }
                 }
@@ -251,12 +398,15 @@ function updateSchemaFromData(schema: any, data: any): any {
                 const currentValues = getEnumValues(unwrappedField);
                 
                 if (typeof value === 'string' && !currentValues.includes(value)) {
-                    const newEnumValues = [...currentValues, value];
-                    const newEnum = z.enum(toTuple(newEnumValues));
-                    const newUnion = newEnum.or(z.string().describe(DEFAULT_DESC));
+                    const sanitizedValue = sanitizeEnumValue(value);
+                    const newEnumValues = [...currentValues, sanitizedValue];
+                    const newEnum = zod.enum(toTuple(newEnumValues));
+                    const newUnion = newEnum.or(zod.string().describe(DEFAULT_DESC));
                     setMetadata(newUnion, { enumForge: true });
-                    // If it was optional, wrap the new union back in optional
-                    const finalField = isOptional ? newUnion.optional() : newUnion;
+                    // Wrap the new union back with nullable/optional in the same order
+                    let finalField = newUnion;
+                    if (isNullable) finalField = finalField.nullable();
+                    if (isOptional) finalField = finalField.optional();
                     modifiedFields[key] = finalField;
                 }
             }
@@ -280,7 +430,8 @@ export function forgeEnum(...args: any[]): any {
 
     const getNewValues = (base: string[], add: string | string[]): ZodEnumValues => {
         const toAdd = Array.isArray(add) ? add : [add];
-        return toTuple([...base, ...toAdd]);
+        const sanitizedToAdd = toAdd.map(value => sanitizeEnumValue(value));
+        return toTuple([...base, ...sanitizedToAdd]);
     };
 
     // Overload 1: (values, add)
@@ -302,15 +453,23 @@ export function forgeEnum(...args: any[]): any {
         const key = arg2;
         const field = getShape(schema)[key];
 
-        if (!isZodEnum(field)) {
+        // Unwrap optional and nullable to get the underlying enum
+        const { schema: unwrappedField, isOptional, isNullable } = unwrapOptionalAndNullable(field);
+
+        if (!isZodEnum(unwrappedField)) {
             throw new Error(`Field "${key}" is not a ZodEnum.`);
         }
         
-        const baseValues = getEnumValues(field);
+        const baseValues = getEnumValues(unwrappedField);
         const newValues = getNewValues(baseValues, arg3);
         
+        // Create new enum and wrap back with nullable/optional in the same order
+        let newEnum = z.enum(newValues);
+        if (isNullable) newEnum = newEnum.nullable();
+        if (isOptional) newEnum = newEnum.optional();
+        
         return extendSchema(schema, {
-            [key]: z.enum(newValues),
+            [key]: newEnum,
         });
     }
 
