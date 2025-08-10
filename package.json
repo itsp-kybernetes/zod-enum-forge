@@ -1,6 +1,6 @@
 {
   "name": "zod-enum-forge",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Tiny helpers to extend Zod enums for open-set/iterative classification workflows.",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -24,6 +24,10 @@
     "dev": "tsup src/index.ts --format esm,cjs --dts --watch",
     "prepublishOnly": "npm run build",
     "test": "vitest"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/itsp-kybernetes/zod-enum-forge.git"
   },
   "keywords": [
     "zod",
