@@ -12,7 +12,7 @@
   <a href="https://www.npmjs.com/package/zod-enum-forge">
     <img src="https://img.shields.io/npm/v/zod-enum-forge.svg" alt="npm version">
   </a>
-  <a href="https://github.com/twój-username/zod-enum-forge/blob/main/LICENSE">
+  <a href="https://github.com/itsp-kybernetes/zod-enum-forge/blob/master/LICENSE">
     <img src="https://img.shields.io/badge/license-BSD--2--Clause-blue.svg" alt="License">
   </a>
 </p>
@@ -460,7 +460,9 @@ const schema = z.object({
 forgeEnum(schema, 'name', 'test');
 ```
 
-## Contributing
+## Project source and contributing
+
+Source code is available on GitHub: [itsp-kybernetes/zod-enum-forge](https://github.com/itsp-kybernetes/zod-enum-forge)
 
 Contributions are welcome! Please feel free to submit a Pull Request.
 
