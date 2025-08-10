@@ -51,72 +51,54 @@ function setMetadata(schema, metadata) {
   }
 }
 function getEnumValues(enumDef) {
-  if (zodVersion === "v4") {
-    if (enumDef._zod?.values) {
-      return Array.from(enumDef._zod.values);
+  const tryExtractValues = (...extractors) => {
+    for (const extractor of extractors) {
+      try {
+        const result = extractor();
+        if (result) {
+          return Array.isArray(result) ? result : Object.values(result);
+        }
+      } catch {
+      }
     }
-    if (enumDef.enum) {
-      return Object.values(enumDef.enum);
-    }
-    const def = getDef(enumDef);
-    if (def?.entries) {
-      return Object.values(def.entries);
-    }
-  } else {
-    if (enumDef.enum) {
-      return Object.values(enumDef.enum);
-    }
-    const def = getDef(enumDef);
-    if (def?.values) {
-      return def.values;
-    }
+    return [];
+  };
+  const values = tryExtractValues(
+    () => enumDef._zod?.values && Array.from(enumDef._zod.values),
+    // v4 Set
+    () => enumDef.enum,
+    // Common .enum property
+    () => getDef(enumDef)?.entries,
+    // v4 def entries
+    () => getDef(enumDef)?.values
+    // v3 def values
+  );
+  if (values.length === 0) {
+    throw new Error("Unable to extract enum values");
   }
-  throw new Error("Unable to extract enum values");
+  return values;
 }
-function getShape(schema) {
-  return schema.shape;
+function createZodTypeGuard(typeName) {
+  return function(x) {
+    const def = x?._def || x?._zod?.def;
+    return def?.typeName === typeName || x?._zod?.traits?.has(typeName) || x?._zod?.traits?.has(`$${typeName}`);
+  };
 }
-function extendSchema(schema, fields) {
-  return schema.extend(fields);
-}
-function isZodObject(x) {
-  const def = x?._def || x?._zod?.def;
-  return def?.typeName === "ZodObject" || x?._zod?.traits?.has("ZodObject") || x?._zod?.traits?.has("$ZodObject");
-}
-function isZodEnum(x) {
-  const def = x?._def || x?._zod?.def;
-  return def?.typeName === "ZodEnum" || x?._zod?.traits?.has("ZodEnum") || x?._zod?.traits?.has("$ZodEnum");
-}
-function isZodUnion(x) {
-  const def = x?._def || x?._zod?.def;
-  return def?.typeName === "ZodUnion" || x?._zod?.traits?.has("ZodUnion") || x?._zod?.traits?.has("$ZodUnion");
-}
-function isZodString(x) {
-  const def = x?._def || x?._zod?.def;
-  return def?.typeName === "ZodString" || x?._zod?.traits?.has("ZodString") || x?._zod?.traits?.has("$ZodString");
-}
-function isZodOptional(x) {
-  const def = x?._def || x?._zod?.def;
-  return def?.typeName === "ZodOptional" || x?._zod?.traits?.has("ZodOptional") || x?._zod?.traits?.has("$ZodOptional");
-}
-function isZodNullable(x) {
-  const def = x?._def || x?._zod?.def;
-  return def?.typeName === "ZodNullable" || x?._zod?.traits?.has("ZodNullable") || x?._zod?.traits?.has("$ZodNullable");
-}
-function unwrapOptional(x) {
-  if (isZodOptional(x)) {
+var isZodObject = createZodTypeGuard("ZodObject");
+var isZodEnum = createZodTypeGuard("ZodEnum");
+var isZodUnion = createZodTypeGuard("ZodUnion");
+var isZodString = createZodTypeGuard("ZodString");
+var isZodOptional = createZodTypeGuard("ZodOptional");
+var isZodNullable = createZodTypeGuard("ZodNullable");
+function unwrapZodType(x, typeGuard) {
+  if (typeGuard(x)) {
     const def = getDef(x);
     return def?.innerType;
   }
   return x;
 }
-function unwrapNullable(x) {
-  if (isZodNullable(x)) {
-    const def = getDef(x);
-    return def?.innerType;
-  }
-  return x;
-}
+var unwrapOptional = (x) => unwrapZodType(x, isZodOptional);
+var unwrapNullable = (x) => unwrapZodType(x, isZodNullable);
 function unwrapOptionalAndNullable(x) {
   let schema = x;
   let isOptional = false;
@@ -203,7 +185,7 @@ function flexEnum(...args) {
 }
 function updateSchemaFromData(schema, data, zodInstance) {
   const zod = zodInstance || z5;
-  const shape = getShape(schema);
+  const shape = schema.shape;
   const modifiedFields = {};
   for (const key in shape) {
     if (Object.prototype.hasOwnProperty.call(shape, key)) {
@@ -270,7 +252,7 @@ function updateSchemaFromData(schema, data, zodInstance) {
       }
     }
   }
-  return Object.keys(modifiedFields).length > 0 ? extendSchema(schema, modifiedFields) : schema;
+  return Object.keys(modifiedFields).length > 0 ? schema.extend(modifiedFields) : schema;
 }
 function forgeEnum(...args) {
   const [arg1, arg2, arg3] = args;
@@ -291,7 +273,7 @@ function forgeEnum(...args) {
   if (isZodObject(arg1) && typeof arg2 === "string") {
     const schema = arg1;
     const key = arg2;
-    const field = getShape(schema)[key];
+    const field = schema.shape[key];
     const { schema: unwrappedField, isOptional, isNullable } = unwrapOptionalAndNullable(field);
     if (!isZodEnum(unwrappedField)) {
       throw new Error(`Field "${key}" is not a ZodEnum.`);
@@ -301,7 +283,8 @@ function forgeEnum(...args) {
     let newEnum = z5.enum(newValues);
     if (isNullable) newEnum = newEnum.nullable();
     if (isOptional) newEnum = newEnum.optional();
-    return extendSchema(schema, {
+    return schema.extend({
+      // Direct call instead of extendSchema helper
       [key]: newEnum
     });
   }
