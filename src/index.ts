@@ -83,108 +83,73 @@ function setMetadata(schema: any, metadata: any): void {
 }
 
 function getEnumValues(enumDef: any): string[] {
-  if (zodVersion === 'v4') {
-    // Check for v4 _zod.values Set
-    if (enumDef._zod?.values) {
-      return Array.from(enumDef._zod.values);
+  // Helper function to try different enum value extraction strategies
+  const tryExtractValues = (...extractors: (() => any)[]): string[] => {
+    for (const extractor of extractors) {
+      try {
+        const result = extractor();
+        if (result) {
+          return Array.isArray(result) ? result : Object.values(result);
+        }
+      } catch {
+        // Continue to next extractor
+      }
     }
-    // Check for .enum property (should exist in v4)
-    if (enumDef.enum) {
-      return Object.values(enumDef.enum);
-    }
-    // Check def entries
-    const def = getDef(enumDef);
-    if (def?.entries) {
-      return Object.values(def.entries);
-    }
-  } else {
-    // v3 uses .enum property
-    if (enumDef.enum) {
-      return Object.values(enumDef.enum);
-    }
-    // Fallback to internal def structure
-    const def = getDef(enumDef);
-    if (def?.values) {
-      return def.values;
-    }
+    return [];
+  };
+
+  const values = tryExtractValues(
+    () => enumDef._zod?.values && Array.from(enumDef._zod.values), // v4 Set
+    () => enumDef.enum,                                            // Common .enum property
+    () => getDef(enumDef)?.entries,                               // v4 def entries
+    () => getDef(enumDef)?.values                                 // v3 def values
+  );
+
+  if (values.length === 0) {
+    throw new Error('Unable to extract enum values');
   }
   
-  throw new Error('Unable to extract enum values');
-}
-
-function getShape(schema: any): any {
-  return schema.shape;
-}
-
-function extendSchema(schema: any, fields: any): any {
-  return schema.extend(fields);
+  return values;
 }
 
 // --- Type Guards ---
 
-function isZodObject(x: unknown): boolean {
-  // Try both v3 and v4 detection
-  const def = (x as any)?._def || (x as any)?._zod?.def;
-  return def?.typeName === 'ZodObject' || 
-         (x as any)?._zod?.traits?.has('ZodObject') || 
-         (x as any)?._zod?.traits?.has('$ZodObject');
+/**
+ * Generic type guard factory for Zod types
+ * Works with both v3 and v4 by checking typeName in def and traits in _zod
+ */
+function createZodTypeGuard(typeName: string) {
+  return function(x: unknown): boolean {
+    // Try both v3 and v4 detection
+    const def = (x as any)?._def || (x as any)?._zod?.def;
+    return def?.typeName === typeName || 
+           (x as any)?._zod?.traits?.has(typeName) || 
+           (x as any)?._zod?.traits?.has(`$${typeName}`);
+  };
 }
 
-function isZodEnum(x: unknown): boolean {
-  // Try both v3 and v4 detection
-  const def = (x as any)?._def || (x as any)?._zod?.def;
-  return def?.typeName === 'ZodEnum' || 
-         (x as any)?._zod?.traits?.has('ZodEnum') || 
-         (x as any)?._zod?.traits?.has('$ZodEnum');
-}
+// Generate all type guards using the factory
+const isZodObject = createZodTypeGuard('ZodObject');
+const isZodEnum = createZodTypeGuard('ZodEnum');
+const isZodUnion = createZodTypeGuard('ZodUnion');
+const isZodString = createZodTypeGuard('ZodString');
+const isZodOptional = createZodTypeGuard('ZodOptional');
+const isZodNullable = createZodTypeGuard('ZodNullable');
 
-function isZodUnion(x: unknown): boolean {
-  // Try both v3 and v4 detection
-  const def = (x as any)?._def || (x as any)?._zod?.def;
-  return def?.typeName === 'ZodUnion' || 
-         (x as any)?._zod?.traits?.has('ZodUnion') || 
-         (x as any)?._zod?.traits?.has('$ZodUnion');
-}
-
-function isZodString(x: unknown): boolean {
-  // Try both v3 and v4 detection
-  const def = (x as any)?._def || (x as any)?._zod?.def;
-  return def?.typeName === 'ZodString' || 
-         (x as any)?._zod?.traits?.has('ZodString') || 
-         (x as any)?._zod?.traits?.has('$ZodString');
-}
-
-function isZodOptional(x: unknown): boolean {
-  // Try both v3 and v4 detection
-  const def = (x as any)?._def || (x as any)?._zod?.def;
-  return def?.typeName === 'ZodOptional' || 
-         (x as any)?._zod?.traits?.has('ZodOptional') || 
-         (x as any)?._zod?.traits?.has('$ZodOptional');
-}
-
-function isZodNullable(x: unknown): boolean {
-  // Try both v3 and v4 detection
-  const def = (x as any)?._def || (x as any)?._zod?.def;
-  return def?.typeName === 'ZodNullable' || 
-         (x as any)?._zod?.traits?.has('ZodNullable') || 
-         (x as any)?._zod?.traits?.has('$ZodNullable');
-}
-
-function unwrapOptional(x: any): any {
-  if (isZodOptional(x)) {
+/**
+ * Generic unwrapper for Zod wrapper types (optional, nullable, etc.)
+ */
+function unwrapZodType(x: any, typeGuard: (x: unknown) => boolean): any {
+  if (typeGuard(x)) {
     const def = getDef(x);
     return def?.innerType;
   }
   return x;
 }
 
-function unwrapNullable(x: any): any {
-  if (isZodNullable(x)) {
-    const def = getDef(x);
-    return def?.innerType;
-  }
-  return x;
-}
+// Create specific unwrappers using the generic function
+const unwrapOptional = (x: any) => unwrapZodType(x, isZodOptional);
+const unwrapNullable = (x: any) => unwrapZodType(x, isZodNullable);
 
 function unwrapOptionalAndNullable(x: any): { schema: any; isOptional: boolean; isNullable: boolean } {
   let schema = x;
@@ -327,7 +292,7 @@ export function flexEnum(...args: any[]): any {
 
 function updateSchemaFromData(schema: any, data: any, zodInstance?: any): any {
     const zod = zodInstance || z; // Use passed instance or fallback to global
-    const shape = getShape(schema);
+    const shape = schema.shape; // Direct access instead of getShape helper
     const modifiedFields: Record<string, any> = {};
 
     for (const key in shape) {
@@ -413,7 +378,7 @@ function updateSchemaFromData(schema: any, data: any, zodInstance?: any): any {
         }
     }
 
-    return Object.keys(modifiedFields).length > 0 ? extendSchema(schema, modifiedFields) : schema;
+    return Object.keys(modifiedFields).length > 0 ? schema.extend(modifiedFields) : schema;
 }
 
 // --- forgeEnum ---
@@ -451,7 +416,7 @@ export function forgeEnum(...args: any[]): any {
     if (isZodObject(arg1) && typeof arg2 === 'string') {
         const schema = arg1;
         const key = arg2;
-        const field = getShape(schema)[key];
+        const field = schema.shape[key]; // Direct access instead of getShape helper
 
         // Unwrap optional and nullable to get the underlying enum
         const { schema: unwrappedField, isOptional, isNullable } = unwrapOptionalAndNullable(field);
@@ -468,7 +433,7 @@ export function forgeEnum(...args: any[]): any {
         if (isNullable) newEnum = newEnum.nullable();
         if (isOptional) newEnum = newEnum.optional();
         
-        return extendSchema(schema, {
+        return schema.extend({ // Direct call instead of extendSchema helper
             [key]: newEnum,
         });
     }
