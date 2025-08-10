@@ -1,6 +1,6 @@
 {
   "name": "zod-enum-forge",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Tiny helpers to extend Zod enums for open-set/iterative classification workflows.",
   "type": "module",
   "main": "./dist/index.cjs",
