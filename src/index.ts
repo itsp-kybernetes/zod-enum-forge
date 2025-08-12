@@ -442,3 +442,267 @@ export function forgeEnum(...args: any[]): any {
         "Invalid forgeEnum signature. Use: forgeEnum(values, add), forgeEnum(z.enum(...), add) or forgeEnum(schema, 'key', add)."
     );
 }
+
+// --- Helpers for new functionality ---
+interface FlexityInfo { values: string[]; description?: string }
+export type FlexityLayer = Record<string, FlexityInfo>;
+
+function extractEnumPartFromFlexEnum(flex: any): any {
+  const def = getDef(flex);
+  if (isZodUnion(flex)) {
+    // flexEnum union structure enum.or(string)
+    return def.options[0];
+  }
+  if (isZodEnum(flex)) return flex; // plain enum possibly with metadata
+  throw new Error('Not a flex enum');
+}
+
+function cloneEnumWithValues(zodInstance: any, baseEnum: any, newValues: string[]): any {
+  // Create fresh enum (safer than mutating existing)
+  return zodInstance.enum(toTuple(newValues));
+}
+
+function wrapEnumLike(original: any, replacementEnum: any, isOptional: boolean, isNullable: boolean): any {
+  let out = replacementEnum;
+  if (isNullable) out = out.nullable();
+  if (isOptional) out = out.optional();
+  return out;
+}
+
+// --- forgeEnum alias ---
+export function addToEnum(...args: any[]) { return (forgeEnum as any)(...args); }
+
+// --- limitEnum / deleteFromEnum ---
+export function limitEnum(values: string[], remove: string|string[]): any;
+export function limitEnum(enumOrFlex: any, remove: string|string[]): any;
+export function limitEnum(schema: any, key: string, remove: string|string[]): any;
+export function limitEnum(...args: any[]): any {
+  const [a1,a2,a3] = args;
+  const toRemove = (r: string|string[]) => new Set((Array.isArray(r) ? r : [r]).map(x=>x));
+  const filterValues = (vals: string[], rem: Set<string>) => vals.filter(v => !rem.has(v));
+
+  const processFlexOrEnum = (target: any, remove: string|string[], zodInstance: any): any => {
+    const remSet = toRemove(remove);
+    if (isZodEnum(target)) {
+      const current = getEnumValues(target);
+      const next = filterValues(current, remSet);
+      if (next.length === 0) throw new Error('Resulting enum would be empty.');
+      return zodInstance.enum(toTuple(next));
+    }
+    if (isFlexEnum(target)) {
+      const def = getDef(target);
+      if (isZodUnion(target)) {
+        const enumPart = def.options[0];
+        const stringPart = def.options[1];
+        const current = getEnumValues(enumPart);
+        const next = filterValues(current, remSet);
+        if (next.length === 0) throw new Error('Resulting enum would be empty.');
+        const newEnum = zodInstance.enum(toTuple(next));
+        const stringDef = getDef(stringPart);
+        const description = stringDef?.description || DEFAULT_DESC;
+        const newUnion = newEnum.or(zodInstance.string().describe(description));
+        setMetadata(newUnion, { enumForge: true, description });
+        return newUnion;
+      }
+      // plain enum with metadata
+      const current = getEnumValues(target);
+      const next = filterValues(current, remSet);
+      if (next.length === 0) throw new Error('Resulting enum would be empty.');
+      const newEnum = zodInstance.enum(toTuple(next));
+      // preserve metadata? keep it as flex for consistency
+      setMetadata(newEnum, { enumForge: true, description: getDef(target)?.metadata?.description });
+      return newEnum;
+    }
+    throw new Error('limitEnum: unsupported target type.');
+  };
+
+  // Overload 1: array
+  if (Array.isArray(a1)) {
+    const rem = a2;
+    const remSet = toRemove(rem);
+    const next = (a1 as string[]).filter(v => !remSet.has(v));
+    if (next.length === 0) throw new Error('Resulting enum would be empty.');
+    return z.enum(toTuple(next));
+  }
+
+  // Overload 2: enum or flexEnum
+  if (a1 && (isZodEnum(a1) || isFlexEnum(a1))) {
+    return processFlexOrEnum(a1, a2, getZodInstanceFromSchema(a1));
+  }
+
+  // Overload 3: schema, key, remove
+  if (isZodObject(a1) && typeof a2 === 'string') {
+    const schema = a1; const key = a2 as string; const rem = a3;
+    const field = schema.shape[key];
+    const { schema: unwrapped, isOptional, isNullable } = unwrapOptionalAndNullable(field);
+    const zodInstance = getZodInstanceFromSchema(unwrapped);
+    if (!(isZodEnum(unwrapped) || isFlexEnum(unwrapped))) throw new Error(`Field "${key}" is not a ZodEnum / flexEnum.`);
+    const updated = processFlexOrEnum(unwrapped, rem, zodInstance);
+    const finalField = wrapEnumLike(field, updated, isOptional, isNullable); // field contains wrappers already; we rebuild through unwrapped? Simplify by rewrapping on updated
+    return schema.extend({ [key]: finalField });
+  }
+
+  throw new Error('Invalid limitEnum signature.');
+}
+export function deleteFromEnum(...args: any[]) { return (limitEnum as any)(...args); }
+
+// --- strictEnum / deflexStructure ---
+export function strictEnum(schemaOrFlex: any): any {
+  // Single flex/enum case
+  if (isFlexEnum(schemaOrFlex) || isZodEnum(schemaOrFlex)) {
+    return _strictOne(schemaOrFlex);
+  }
+  if (isZodObject(schemaOrFlex)) {
+    return _strictTraverse(schemaOrFlex);
+  }
+  throw new Error('strictEnum expects a flexEnum / enum / ZodObject structure');
+}
+
+function _strictOne(x: any): any {
+  let isOptional = false, isNullable = false;
+  // unwrap wrappers if any (user might pass wrapped field directly)
+  const { schema: unwrapped, isOptional: opt, isNullable: nul } = unwrapOptionalAndNullable(x);
+  isOptional = opt; isNullable = nul;
+  if (isFlexEnum(unwrapped)) {
+    if (isZodUnion(unwrapped)) {
+      const enumPart = extractEnumPartFromFlexEnum(unwrapped);
+      // remove metadata if present
+      setMetadata(enumPart, undefined);
+      let rebuilt = enumPart;
+      if (isNullable) rebuilt = rebuilt.nullable();
+      if (isOptional) rebuilt = rebuilt.optional();
+      return rebuilt;
+    }
+    // plain enum with metadata
+    setMetadata(unwrapped, undefined);
+    let rebuilt = unwrapped;
+    if (isNullable) rebuilt = rebuilt.nullable();
+    if (isOptional) rebuilt = rebuilt.optional();
+    return rebuilt;
+  }
+  // already simple enum - just remove metadata if any
+  setMetadata(unwrapped, undefined);
+  let rebuilt = unwrapped;
+  if (isNullable) rebuilt = rebuilt.nullable();
+  if (isOptional) rebuilt = rebuilt.optional();
+  return rebuilt;
+}
+
+function _strictTraverse(schema: any): any {
+  const shape = schema.shape;
+  const modified: Record<string, any> = {};
+  for (const key in shape) {
+    const field = shape[key];
+    const { schema: unwrapped, isOptional, isNullable } = unwrapOptionalAndNullable(field);
+    if (isFlexEnum(unwrapped)) {
+      const cleaned = _strictOne(unwrapped);
+      let finalField = cleaned;
+      if (isNullable) finalField = finalField.nullable();
+      if (isOptional) finalField = finalField.optional();
+      if (finalField !== field) modified[key] = finalField;
+    } else if (isZodObject(unwrapped)) {
+      const nested = _strictTraverse(unwrapped);
+      if (nested !== unwrapped) {
+        let finalField = nested;
+        if (isNullable) finalField = finalField.nullable();
+        if (isOptional) finalField = finalField.optional();
+        modified[key] = finalField;
+      }
+    }
+  }
+  return Object.keys(modified).length ? schema.extend(modified) : schema;
+}
+
+export function deflexStructure(schema: any): any { return strictEnum(schema); }
+
+// --- separateFlexibility ---
+export function separateFlexibility(schema: any): { schema: any; flexityLayer: FlexityLayer } {
+  if (!isZodObject(schema)) throw new Error('separateFlexibility expects a ZodObject');
+  const layer: FlexityLayer = {};
+  const cleaned = _separateTraverse(schema, layer, []);
+  return { schema: cleaned, flexityLayer: layer };
+}
+
+function _separateTraverse(schema: any, layer: FlexityLayer, path: string[]): any {
+  const shape = schema.shape;
+  const modified: Record<string, any> = {};
+  for (const key in shape) {
+    const field = shape[key];
+    const newPath = [...path, key];
+    const pathStr = newPath.join('.');
+    const { schema: unwrapped, isOptional, isNullable } = unwrapOptionalAndNullable(field);
+    if (isFlexEnum(unwrapped)) {
+      const def = getDef(unwrapped);
+      let description: string|undefined;
+      if (isZodUnion(unwrapped)) {
+        const stringPart = getDef(unwrapped).options[1];
+        description = getDef(stringPart)?.description || getDef(unwrapped)?.metadata?.description;
+      } else {
+        description = def?.metadata?.description;
+      }
+      const enumPart = isZodUnion(unwrapped) ? getDef(unwrapped).options[0] : unwrapped;
+      const values = getEnumValues(enumPart);
+      layer[pathStr] = { values: [...values], description };
+      const cleaned = strictEnum(unwrapped);
+      let finalField = cleaned;
+      if (isNullable) finalField = finalField.nullable();
+      if (isOptional) finalField = finalField.optional();
+      modified[key] = finalField;
+    } else if (isZodObject(unwrapped)) {
+      const nested = _separateTraverse(unwrapped, layer, newPath);
+      if (nested !== unwrapped) {
+        let finalField = nested;
+        if (isNullable) finalField = finalField.nullable();
+        if (isOptional) finalField = finalField.optional();
+        modified[key] = finalField;
+      }
+    }
+  }
+  return Object.keys(modified).length ? schema.extend(modified) : schema;
+}
+
+// --- integrateFlexibility ---
+export function integrateFlexibility(schema: any, flexityLayer: FlexityLayer): any {
+  if (!isZodObject(schema)) throw new Error('integrateFlexibility expects a ZodObject');
+  return _integrateTraverse(schema, flexityLayer, []);
+}
+
+function _integrateTraverse(schema: any, layer: FlexityLayer, path: string[]): any {
+  const shape = schema.shape;
+  const modified: Record<string, any> = {};
+  for (const key in shape) {
+    const field = shape[key];
+    const newPath = [...path, key];
+    const pathStr = newPath.join('.');
+    const { schema: unwrapped, isOptional, isNullable } = unwrapOptionalAndNullable(field);
+    if (layer[pathStr]) {
+      // We expect unwrapped to be a ZodEnum now
+      if (!isZodEnum(unwrapped)) {
+        // If it's still flex maybe, just continue
+        continue;
+      }
+      const info = layer[pathStr];
+      const zodInstance = getZodInstanceFromSchema(unwrapped);
+      // Ensure values are union of current + stored (in case of drift)
+      const existingValues = getEnumValues(unwrapped);
+      const unionValues = Array.from(new Set([...existingValues, ...info.values]));
+      const baseEnum = zodInstance.enum(toTuple(unionValues));
+      const stringSchema = zodInstance.string().describe(info.description || DEFAULT_DESC);
+      const flex = baseEnum.or(stringSchema);
+      setMetadata(flex, { enumForge: true, description: info.description || DEFAULT_DESC });
+      let finalField = flex;
+      if (isNullable) finalField = finalField.nullable();
+      if (isOptional) finalField = finalField.optional();
+      modified[key] = finalField;
+    } else if (isZodObject(unwrapped)) {
+      const nested = _integrateTraverse(unwrapped, layer, newPath);
+      if (nested !== unwrapped) {
+        let finalField = nested; if (isNullable) finalField = finalField.nullable(); if (isOptional) finalField = finalField.optional();
+        modified[key] = finalField;
+      }
+    }
+  }
+  return Object.keys(modified).length ? schema.extend(modified) : schema;
+}
+
+export { isFlexEnum };

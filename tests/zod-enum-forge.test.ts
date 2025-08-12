@@ -2,6 +2,7 @@
 import * as z3 from "zod/v3";
 import * as z4 from "zod/v4";
 import { toJSONSchema } from 'zod';
+import { describe, it, expect } from 'vitest';
 
 let z: any;
 let zodVersion: 'v3' | 'v4';
@@ -23,8 +24,29 @@ function getDef(schema: any): any {
     return schema._zod?.def || schema._def || schema.def;
 }
 
-import { flexEnum, forgeEnum } from '../src/index';
-import { describe, it, expect } from 'vitest';
+import { flexEnum, forgeEnum, addToEnum, limitEnum, deleteFromEnum, strictEnum, deflexStructure, separateFlexibility, integrateFlexibility, isFlexEnum } from '../src/index';
+
+function extractEnumValues(e: any): string[] {
+  if (!e) return [];
+  if (e.enum) return Object.values(e.enum);
+  const def = getDef(e);
+  if (Array.isArray(def?.values)) return def.values;
+  if (Array.isArray(def?.options)) return def.options;
+  return [];
+}
+
+function unwrapAll(x: any): any {
+  let curr = x;
+  // unwrap optional/nullable wrappers that expose innerType
+  while (true) {
+    const def = (curr as any)?._def || (curr as any)?._zod?.def;
+    if (def && def.innerType) {
+      curr = def.innerType; continue;
+    }
+    break;
+  }
+  return curr;
+}
 
 describe('flexEnum', () => {
     it('should create a flexible enum from an array of values', () => {
@@ -200,14 +222,14 @@ describe('flexEnum', () => {
         expect(basicJsonSchema.anyOf).toHaveLength(2);
         
         // Should have enum part
-        const enumPart = basicJsonSchema.anyOf.find((part: any) => part.enum);
+        const enumPart = (basicJsonSchema as any).anyOf.find((part: any) => part.enum);
         expect(enumPart).toBeDefined();
-        expect(enumPart.enum).toEqual(['pending', 'done', 'cancelled']);
+        expect((enumPart as any).enum).toEqual(['pending', 'done', 'cancelled']);
         
         // Should have string part for flexibility
-        const stringPart = basicJsonSchema.anyOf.find((part: any) => part.type === 'string' && !part.enum);
+        const stringPart = (basicJsonSchema as any).anyOf.find((part: any) => part.type === 'string' && !part.enum);
         expect(stringPart).toBeDefined();
-        expect(stringPart.type).toBe('string');
+        expect((stringPart as any).type).toBe('string');
 
         // Test complex schema with flexEnum
         const complexSchema = z.object({
@@ -224,14 +246,14 @@ describe('flexEnum', () => {
         expect(complexJsonSchema.properties).toHaveProperty('description');
 
         // Check that flexEnum status field has proper anyOf structure
-        const statusProperty = complexJsonSchema.properties.status;
+        const statusProperty = (complexJsonSchema as any).properties.status;
         expect(statusProperty).toHaveProperty('anyOf');
-        expect(statusProperty.anyOf).toHaveLength(2);
+        expect((statusProperty as any).anyOf).toHaveLength(2);
 
         // Check that regular enum category field has simple enum structure
-        const categoryProperty = complexJsonSchema.properties.category;
+        const categoryProperty = (complexJsonSchema as any).properties.category;
         expect(categoryProperty).toHaveProperty('enum');
-        expect(categoryProperty.enum).toEqual(['urgent', 'normal']);
+        expect((categoryProperty as any).enum).toEqual(['urgent', 'normal']);
     });
 
     it('should convert updated schema with new enum values to JSON Schema', () => {
@@ -253,17 +275,17 @@ describe('flexEnum', () => {
         expect(jsonSchema.properties).toHaveProperty('priority');
 
         // Updated status should now be flexEnum (anyOf structure)
-        const statusProperty = jsonSchema.properties.status;
+        const statusProperty = (jsonSchema as any).properties.status;
         expect(statusProperty).toHaveProperty('anyOf');
-        const statusEnumPart = statusProperty.anyOf.find((part: any) => part.enum);
+        const statusEnumPart = (statusProperty as any).anyOf.find((part: any) => part.enum);
         expect(statusEnumPart.enum).toContain('in_progress');
         expect(statusEnumPart.enum).toContain('pending');
         expect(statusEnumPart.enum).toContain('done');
 
         // Priority should still be flexEnum with new value
-        const priorityProperty = jsonSchema.properties.priority;
+        const priorityProperty = (jsonSchema as any).properties.priority;
         expect(priorityProperty).toHaveProperty('anyOf');
-        const priorityEnumPart = priorityProperty.anyOf.find((part: any) => part.enum);
+        const priorityEnumPart = (priorityProperty as any).anyOf.find((part: any) => part.enum);
         expect(priorityEnumPart.enum).toContain('medium');
         expect(priorityEnumPart.enum).toContain('low');
         expect(priorityEnumPart.enum).toContain('high');
@@ -449,4 +471,74 @@ describe('forgeEnum', () => {
     });
 
 
+});
+
+describe('new enum management helpers', () => {
+  it('addToEnum alias works same as forgeEnum', () => {
+    const base = (z as any).enum(['a','b']);
+    const extended1 = forgeEnum(base, 'c');
+    const extended2 = addToEnum(base, 'c');
+    const vals1 = extractEnumValues(extended1);
+    const vals2 = extractEnumValues(extended2);
+    expect(vals2).toEqual(vals1);
+  });
+
+  it('limitEnum removes values from array, enum, flexEnum and schema paths', () => {
+    const e1 = limitEnum(['a','b','c'], 'b');
+    const vals1 = extractEnumValues(e1);
+    expect(vals1).toEqual(['a','c']);
+
+    const base = (z as any).enum(['x','y','z']);
+    const limitedBase = limitEnum(base, ['z']);
+    const vals2 = extractEnumValues(limitedBase);
+    expect(vals2).toEqual(['x','y']);
+
+    const flex = flexEnum(['m','n','o']);
+    const limitedFlex = limitEnum(flex, 'n');
+    const enumPart = getDef(limitedFlex).options[0];
+    const vals3 = extractEnumValues(enumPart);
+    expect(vals3).toEqual(['m','o']);
+
+    const schema = (z as any).object({ status: (z as any).enum(['draft','pub','arch']) });
+    const limitedSchema = limitEnum(schema, 'status', 'arch');
+    const statusEnum = limitedSchema.shape.status;
+    const vals4 = extractEnumValues(statusEnum);
+    expect(vals4).toEqual(['draft','pub']);
+  });
+
+  it('deleteFromEnum alias works', () => {
+    const e = deleteFromEnum(['a','b','c'],'b');
+    const vals = extractEnumValues(e);
+    expect(vals).toEqual(['a','c']);
+  });
+
+  it('strictEnum converts flexEnum back to pure enum and removes metadata', () => {
+    const flex = flexEnum(['a','b']);
+    expect(isFlexEnum(flex)).toBe(true);
+    const strict = strictEnum(flex);
+    expect(isFlexEnum(strict)).toBe(false);
+    const def = getDef(strict);
+    expect(def?.metadata?.enumForge).toBeUndefined();
+  });
+
+  it('deflexStructure same as strictEnum on structures', () => {
+    let schema = (z as any).object({ role: flexEnum(['admin','user']) });
+    const deflexed = deflexStructure(schema);
+    const roleField = deflexed.shape.role;
+    expect(isFlexEnum(roleField)).toBe(false);
+  });
+
+  it('separateFlexibility produces layer and cleaned schema; integrateFlexibility restores', () => {
+    let schema = (z as any).object({ a: flexEnum(['x','y']), nested: (z as any).object({ b: flexEnum(['m','n']).optional().nullable() }) });
+    const { schema: cleaned, flexityLayer } = separateFlexibility(schema);
+    expect(isFlexEnum(cleaned.shape.a)).toBe(false);
+    expect(Object.keys(flexityLayer)).toContain('a');
+    expect(Object.keys(flexityLayer)).toContain('nested.b');
+
+    const restored = integrateFlexibility(cleaned, flexityLayer);
+    expect(isFlexEnum(restored.shape.a)).toBe(true);
+    const bField = restored.shape.nested.shape.b; // wrapped
+    const unwrapped = unwrapAll(bField);
+    expect(isFlexEnum(unwrapped)).toBe(true);
+  });
 });

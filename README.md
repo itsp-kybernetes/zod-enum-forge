@@ -173,6 +173,52 @@ const newSchema = forgeEnum(schema, 'status', 'archived');
 // Schema now has status enum with 'archived' value
 ```
 
+## New Utilities (v0.3.0)
+
+Added helpers for managing enum evolution lifecycle:
+
+- `addToEnum`: alias of `forgeEnum`
+- `limitEnum`: remove values from enums / flexEnums (arrays, direct enums, wrapped optional/nullable, schema paths, or flexEnum unions)
+- `deleteFromEnum`: alias of `limitEnum`
+- `strictEnum`: converts flexEnum (union) or structures back to plain z.enum(...) (preserving optional/nullable wrappers) and removes metadata
+- `deflexStructure`: alias behaving like strictEnum on whole structures
+- `isFlexEnum`: exported predicate detecting flex enums
+- `separateFlexibility`: returns `{ schema, flexityLayer }` where schema has all flexEnums converted to strict enums and flexityLayer maps paths to original values & descriptions
+- `integrateFlexibility`: given a strict schema and a flexityLayer recreates the original schema with flexEnums reintegrated
+
+### FlexityLayer Format
+
+FlexityLayer is a simple object: `{ 'path.to.field': { values: string[], description?: string } }`
+
+### Example
+
+```typescript
+import { z } from 'zod';
+import { flexEnum, separateFlexibility, integrateFlexibility, limitEnum, addToEnum, strictEnum } from 'zod-enum-forge';
+
+const schema = z.object({
+  status: flexEnum(['pending','done']),
+  nested: z.object({ kind: flexEnum(['a','b']).optional().nullable() })
+});
+
+// Extract flexibility layer
+const { schema: strictSchema, flexityLayer } = separateFlexibility(schema);
+// strictSchema now contains pure enums
+// flexityLayer records where flex enums were
+
+// Reintegrate later
+const restored = integrateFlexibility(strictSchema, flexityLayer);
+
+// Remove a value from an enum
+const trimmed = limitEnum(restored, 'status', 'done');
+
+// Add a new value
+const extended = addToEnum(trimmed, 'status', 'archived');
+
+// Force convert a specific field back to strict
+const strictAgain = strictEnum(extended.shape.status);
+```
+
 ## Advanced Usage
 
 ### Nested Objects
